@@ -123,7 +123,7 @@ p_sequence =
   do es <- p_list p_cond SEMI; return (foldr1 Sequence es)
 
 -- {\syn _cond_ \arrow\ "if" _cond_ "then" _cond_ "else" _cond_}
--- {\syn\qquad\qquad\qquad \orr\ "while" _cond_ "do" _cond_ \orr\ _term7_}
+-- {\syn\qquad\qquad\qquad \orr\ "while" _cond_ "do" _cond_ \orr\ _term6_}
 p_cond = 
   do eat IF; e1 <- p_cond; eat THEN; e2 <- p_cond;
                 eat ELSE; e3 <- p_cond; return (If e1 e2 e3)
@@ -132,7 +132,7 @@ p_cond =
   <+> p_term7
 
 -- {\syn _term7_ \arrow\ _term6_ \{ ":=" _term6_ \}}
--- {\syn _term6_ \arrow\ _term5_ \{ ("orelse" | ">>") _term5_ \}}
+-- {\syn _term6_ \arrow\ _term5_ \{ ("orelse" | ">>" _term5_ \}}
 -- {\syn _term5_ \arrow\ _term4_ \{ _relop_ _term4_ \}}
 -- {\syn _term4_ \arrow\ _term3_ \{ _addop_ _term3_ \}}
 -- {\syn _term3_ \arrow\ _term2_ \{ _mulop_ _term2_ \}}

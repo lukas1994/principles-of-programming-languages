@@ -14,8 +14,9 @@ import qualified Control.Concurrent
 import qualified System.Environment
 import System.IO(stdout, stderr, hPutStrLn, hFlush)
 import System.IO.Unsafe(unsafePerformIO)
-import System.Posix(installHandler, sigINT, Handler(Catch))
-	
+import Control.Applicative(Applicative(..))
+import Control.Monad(liftM, ap)
+
 type LineNumber = Int
 
 data LexState = MkLexState String LineNumber
@@ -29,44 +30,44 @@ newtype Lexer t = MkLexer (LexState -> Maybe (LexTok t, LexState))
 runLexer (MkLexer g) st = g st
 
 instance Monad Lexer where
-  return x = 
-    MkLexer (\ (MkLexState input lnum) -> 
+  return x =
+    MkLexer (\ (MkLexState input lnum) ->
       Just (MkLexTok x lnum, MkLexState input lnum))
 
-  m >>= f = 
-    MkLexer (\ st -> 
-      case runLexer m st of 
+  m >>= f =
+    MkLexer (\ st ->
+      case runLexer m st of
         Just (x, st') -> runLexer (f (token_of x)) st'
 	Nothing -> Nothing)
 
 peekch :: Lexer Char
-peekch = MkLexer g 
-  where 
+peekch = MkLexer g
+  where
     g (MkLexState (c:s) n) = Just (MkLexTok c n, MkLexState (c:s) n)
     g (MkLexState [] n) = Just (MkLexTok '\0' n, MkLexState [] n)
 
 nextch :: Lexer Char
-nextch = MkLexer g 
-  where 
+nextch = MkLexer g
+  where
     g (MkLexState (c:s) n) = Just (MkLexTok c n, MkLexState s n)
     g (MkLexState [] n) = Nothing
 
 incln :: Lexer ()
-incln = 
-  MkLexer (\ (MkLexState s n) -> 
+incln =
+  MkLexer (\ (MkLexState s n) ->
     Just (MkLexTok () n, MkLexState s (n+1)))
 
 star :: (Char -> Bool) -> Lexer String
-star p = 
-  do 
+star p =
+  do
     c <- peekch
     if p c then do nextch; s <- star p; return (c:s) else return []
 
 switch :: [(Char, Lexer t)] -> Lexer t -> Lexer t
 switch arms deflt =
-  do 
+  do
     c <- peekch
-    case List.lookup c arms of 
+    case List.lookup c arms of
       Just t -> do nextch; t
       Nothing -> deflt
 
@@ -119,11 +120,11 @@ commit (MkLexBuf n ll rr nmax) = MkLexBuf 0 [] rr 0
 errtok :: LexBuf t -> Int
 errtok (MkLexBuf _ _ _ nmax) = nmax-1
 
-newtype Parser t a = 
-  MkParser (forall w . 
+newtype Parser t a =
+  MkParser (forall w .
     LexBuf t -> SCont t w a -> FCont t w -> MCont t w -> Result t w)
 
-data Result t w = 
+data Result t w =
     Success w (LexBuf t)
   | Failure (LexBuf t)
   | More ([LexTok t] -> Result t w)
@@ -140,10 +141,10 @@ runParser :: Parser t a -> LexBuf t -> Result t a
 runParser p buf = callParser p buf Success Failure More
 
 instance Monad (Parser t) where
-  return x = 
+  return x =
     MkParser (\ buf ks kf km -> ks x buf)
 
-  p >>= f = 
+  p >>= f =
     MkParser (\ buf ks kf km ->
       callParser p buf (\ x buf' ->
         callParser (f x) buf' ks kf km) kf km)
@@ -152,18 +153,18 @@ p_fail :: Parser t a
 p_fail = MkParser (\ buf ks kf km -> kf buf)
 
 scan :: Parser t t
-scan = 
+scan =
   MkParser (\ buf ks kf km ->
-    if emptyb buf then 
+    if emptyb buf then
       km (\ toks -> callParser scan (addtoks buf toks) ks kf km)
-    else 
+    else
       ks (token_of (peekb buf)) (forward buf))
 
 infixr 5 <+>
 
 (<+>) :: Parser t a -> Parser t a -> Parser t a
 p <+> q =
-  MkParser (\ buf ks kf km -> 
+  MkParser (\ buf ks kf km ->
     let n = bufpos buf in
     callParser p buf ks
       (\ buf' -> callParser q (rewind n buf') ks kf km) km)
@@ -184,39 +185,39 @@ p_list0 p sep = p_list p sep <+> return []
 
 type Syntax t a = (Lexer t, Parser t a)
 
-dialog :: (Eq t, Show t) => 
+dialog :: (Eq t, Show t) =>
   Syntax t a -> (a -> s -> (String, s)) -> s -> IO ()
 dialog syntax obey init = dialogm syntax obey' init
-  where 
-    obey' e s = 
+  where
+    obey' e s =
       let (out, s') = obey e s in do printStrLn out; return s'
 
-dialogm :: (Eq t, Show t) => 
+dialogm :: (Eq t, Show t) =>
     Syntax t a -> (a -> s -> IO s) -> s -> IO ()
 dialogm syntax obey init =
-  do 
+  do
     args <- System.Environment.getArgs
     arg_loop init args
   where
-    arg_loop st ["-e", exp] = 
+    arg_loop st ["-e", exp] =
       do st' <- load_file syntax obey st exp; return ()
-    arg_loop st (f : args) = 
-      do text <- readFile f; 
+    arg_loop st (f : args) =
+      do text <- readFile f;
 		st' <- load_file syntax obey st text; arg_loop st' args
     arg_loop st [] =
       do read_eval_print syntax obey st; putStrLn "\nBye"
 
-read_eval_print :: (Show t) => 
+read_eval_print :: (Show t) =>
 	Syntax t a -> (a -> s -> IO s) -> s -> IO ()
 read_eval_print (lexer, parser) obey st0 = listen st0
   where
-    listen st = 
+    listen st =
       let parse = runParser parser (initbuf []) in
-      do 
-        trap_interrupts; 
+      do
+        trap_interrupts;
 	stz <- execute (loop 1 parse) st (Just st)
         case stz of
-	  Just st' -> listen st'; Nothing -> return ()  
+	  Just st' -> listen st'; Nothing -> return ()
 
     loop n result st =
       case result of
@@ -230,14 +231,14 @@ read_eval_print (lexer, parser) obey st0 = listen st0
 	  do
             line <- readline (if n == 1 then ">>> " else "... ")
             case line of
-              Nothing -> 
+              Nothing ->
                 -- We got EOF at the prompt
                 return Nothing
               Just s ->
                 -- We got a line: resume parsing
                 loop (n+1) (k (lex_string lexer n s)) st
 
-load_file :: (Show t) => 
+load_file :: (Show t) =>
 	Syntax t a -> (a -> s -> IO s) -> s -> String -> IO s
 load_file (lexer, parser) obey st0 text =
   loop (initbuf (lex_string lexer 1 text)) st0
@@ -245,7 +246,7 @@ load_file (lexer, parser) obey st0 text =
     loop buf st =
       if emptyb buf then
         -- End of file
-      	return st 
+      	return st
       else
 	case runParser parser buf of
 	  Success x buf' ->
@@ -262,33 +263,27 @@ syntax_error buf =
 
 execute :: (a -> IO b) -> a -> b -> IO b
 execute g x dflt =
-  Control.Exception.catch (g x) (\ exc -> 
+  Control.Exception.catch (g x) (\ exc ->
     let ex = show (exc :: Control.Exception.SomeException) in
     do hPutStrLn stderr ("Error: " ++ ex); return dflt)
 
 trap_interrupts :: IO ()
-trap_interrupts =
-  do
-    thr <- Control.Concurrent.myThreadId
-    System.Posix.installHandler sigINT 
-      (Catch (Control.Exception.throwTo thr 
-		(Control.Exception.ErrorCall "interrupted"))) Nothing
-    return ()
+trap_interrupts = return ()
 
 readline :: String -> IO (Maybe String)
 readline prompt =
-  do 
+  do
     putStr prompt; hFlush stdout
-    Control.Exception.catch 
-      (do s <- getLine; return (Just (s ++ "\n"))) 
-      (\ exc -> 
+    Control.Exception.catch
+      (do s <- getLine; return (Just (s ++ "\n")))
+      (\ exc ->
         let ex = exc :: Control.Exception.IOException in return Nothing)
 
 print_value :: Show a => a -> String
 print_value v = (\ v -> "--> " ++ show v) $! v
 
 print_defn :: Show d => Environment d -> String -> String
-print_defn env x = 
+print_defn env x =
   (\ v -> "--- " ++ x ++ " = " ++ show v) $! (find env x)
 
 printStrLn :: String -> IO ()
@@ -297,12 +292,12 @@ printStrLn (c:s) = do putChar c; hFlush stdout; printStrLn s
 
 primwrap :: Show a => String -> ([a] -> b) -> [a] -> b
 primwrap prim f args =
-  unsafePerformIO 
+  unsafePerformIO
     (Control.Exception.catch (return $! f args) match_fail)
-  where 
+  where
     match_fail :: Control.Exception.PatternMatchFail -> b
-    match_fail e = 
-      error ("bad arguments to primitive " ++ prim ++ ": " 
+    match_fail e =
+      error ("bad arguments to primitive " ++ prim ++ ": "
 						++ showlist args)
 
 showlist :: Show a => [a] -> String
@@ -310,3 +305,9 @@ showlist = joinwith ", " . map show
 
 joinwith :: String -> [String] -> String
 joinwith sep = concat . List.intersperse sep
+
+
+instance Functor Lexer where fmap = liftM
+instance Applicative Lexer where pure = return; (<*>) = ap
+instance Functor (Parser t) where fmap = liftM
+instance Applicative (Parser t) where pure = return; (<*>) = ap

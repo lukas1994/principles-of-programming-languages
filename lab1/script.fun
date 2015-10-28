@@ -28,5 +28,5 @@ rec flatsum_it(x) =
   stack := x; s := 0;
   while !stack <> nil do
     (if integer(head(!stack)) then (s := !s + head(!stack); stack := tail(!stack))
-     else stack := append(head(!stack), tail(!stack)));
+     else stack := append(head(!stack), tail(!stack))); -- TODO: use iterative append
   !s;;
