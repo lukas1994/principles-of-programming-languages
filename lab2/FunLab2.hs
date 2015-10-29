@@ -17,7 +17,7 @@ result x mem = (x, mem)
 -- call-by-name effects leaking into the object language.
 
 ($>) :: M a -> (a -> M b) -> M b
-(xm $> f) mem = 
+(xm $> f) mem =
   let (x, mem') = xm mem in (f $! x) mem'
 
 new :: M Location
@@ -37,9 +37,9 @@ data Value =
   | BoolVal Bool
   | Addr Location
   | Nil | Cons Value Value
-  | Function ([Value] -> M Value)
+  | Function ([M Value] -> M Value)
 
-data Def = 
+data Def =
     Const Value
   | Param (M Value)
 
@@ -52,14 +52,13 @@ type Mem = Memory Value
 
 eval :: Expr -> Env -> M Value
 eval (Number n) env = result (IntVal n)
-eval (Variable x) env = 
+eval (Variable x) env =
   case find env x of
     Const v -> result v
     Param vm -> vm
 eval (Apply f es) env =
   eval f env $> (\fv ->
-    evalargs es env $> (\args ->
-      apply fv args))
+    apply fv (map (\e -> eval e env) es))
 eval (If e1 e2 e3) env =
   eval e1 env $> (\b ->
     case b of
@@ -87,23 +86,16 @@ eval (While e1 e2) env = u
 	BoolVal False -> result Nil
 	_ -> error "boolean required in while loop")
 
-evalargs :: [Expr] -> Env -> M [Value]
-evalargs [] env = result []
-evalargs (e:es) env =
-  eval e env $> (\v ->
-    evalargs es env $> (\vs ->
-      result (v:vs)))
-
 abstract :: [Ident] -> Expr -> Env -> Value
 abstract xs e env =
-  Function (\args -> eval e (defargs env xs (map Const args)))
+  Function (\args -> eval e (defargs env xs (map Param args)))
 
-apply :: Value -> [Value] -> M Value
+apply :: Value -> [M Value] -> M Value
 apply (Function f) args = f args
 apply _ args = error "applying a non-function"
 
 elab :: Defn -> Env -> M Env
-elab (Val x e) env = 
+elab (Val x e) env =
   eval e env $> (\v -> result (define env x (Const v)))
 elab (Rec x e) env =
   case e of
@@ -117,7 +109,7 @@ elab (Rec x e) env =
 
 init_env :: Env
 init_env =
-  make_env [constant "nil" Nil, 
+  make_env [constant "nil" Nil,
     constant "true" (BoolVal True), constant "false" (BoolVal False),
     pureprim "+" (\ [IntVal a, IntVal b] -> IntVal (a + b)),
     pureprim "-" (\ [IntVal a, IntVal b] -> IntVal (a - b)),
@@ -142,9 +134,13 @@ init_env =
     primitive "!" (\ [Addr a] -> get a)]
   where
     constant x v = (x, Const v)
-    primitive x f = (x, Const (Function (primwrap x f)))
+    primitive :: Ident -> ([Value] -> M Value) -> (Ident, Def)
+    -- primitive x f = (x, Const (Function (primwrap x f)))
+    primitive x f = (x, Const (Function (\args -> values args $> \l -> f l)))
     pureprim x f = primitive x (result . f)
-
+    values :: [M a] -> M [a]
+    values [] = result []
+    values (x:xs) = x $> (\v -> values xs $> (\vs -> result (v:vs)))
 
 -- AUXILIARY FUNCTIONS ON VALUES
 
@@ -162,7 +158,7 @@ instance Show Value where
   show (Addr a) = "<address " ++ show a ++ ">"
   show Nil = "[]"
   show (Cons h t) = "[" ++ show h ++ shtail t ++ "]"
-    where 
+    where
       shtail Nil = ""
       shtail (Cons h t) = ", " ++ show h ++ shtail t
       shtail x = " . " ++ show x
