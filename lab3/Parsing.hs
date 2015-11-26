@@ -15,6 +15,8 @@ import qualified System.Environment
 import System.IO(stdout, stderr, hPutStrLn, hFlush)
 import System.IO.Unsafe(unsafePerformIO)
 import System.Posix(installHandler, sigINT, Handler(Catch))
+import Control.Applicative(Applicative(..))
+import Control.Monad(liftM, ap)
 	
 type LineNumber = Int
 
@@ -310,3 +312,9 @@ showlist = joinwith ", " . map show
 
 joinwith :: String -> [String] -> String
 joinwith sep = concat . List.intersperse sep
+
+
+instance Functor Lexer where fmap = liftM
+instance Applicative Lexer where pure = return; (<*>) = ap
+instance Functor (Parser t) where fmap = liftM
+instance Applicative (Parser t) where pure = return; (<*>) = ap

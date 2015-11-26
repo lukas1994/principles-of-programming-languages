@@ -10,21 +10,31 @@ import FunParser
 
 infixl 1 $>
 
-type M a = Mem -> (a, Mem)
+type M a = Mem -> (Maybe a, Mem)
 
-result x mem = (x, mem)
+result x mem = (Just x, mem)
 
 (xm $> f) mem =
-  let (x, mem') = xm mem in (f $! x) mem'
+  let (x, mem') = xm mem in case x of
+    Just x' -> (f $! x') mem'
+    Nothing -> (Nothing, mem')
 
 get :: Location -> M Value
-get a mem = (contents mem a, mem)
+get a mem = (Just (contents mem a), mem)
 
 put :: Location -> Value -> M ()
-put a v mem = ((), update mem a v)
+put a v mem = (Just (), update mem a v)
 
 new :: M Location
-new mem = let (a, mem') = fresh mem in (a, mem')
+new mem = let (a, mem') = fresh mem in (Just a, mem')
+
+exit :: M a
+exit m = (Nothing, m)
+
+orelse :: M a -> M a -> M a
+orelse xm ym m = let (x, m') = xm m in case x of
+  Just x' -> (x, m')
+  Nothing -> ym m' -- TODO or use old memory???
 
 bind :: Value -> M Location
 bind v = new $> (\ a -> put a v $> (\ () -> result a))
@@ -33,7 +43,7 @@ bind v = new $> (\ a -> put a v $> (\ () -> result a))
 -- SEMANTIC DOMAINS
 
 data Value =
-    IntVal Integer 
+    IntVal Integer
   | BoolVal Bool
   | Nil | Cons Value Value
 
@@ -50,9 +60,16 @@ type Mem = Memory Value
 
 eval :: Expr -> Env -> M Value
 
+eval Exit env = exit
+
+-- exit terminates dynamically closest loop
+-- might not be the same as the one that textually encloses loop
+eval (Loop e) env = u
+  where u = (eval e env $> \_ -> u) `orelse` result Nil
+
 eval (Number n) env = result (IntVal n)
 
-eval (Variable x) env = 
+eval (Variable x) env =
   case find env x of
     Const v -> result v
     Ref a -> get a
@@ -94,7 +111,7 @@ eval (While e1 e2) env = u
 
 eval e env =
   error ("can't evaluate " ++ pretty e)
-	
+
 mapm :: (a -> M b) -> [a] -> M [b]
 mapm f [] = result []
 mapm f (x:xs) =
@@ -102,7 +119,7 @@ mapm f (x:xs) =
 
 abstract :: [Ident] -> Expr -> Env -> Def
 abstract xs e env =
-  Proc (\ args -> 
+  Proc (\ args ->
     mapm bind args $> (\ as ->
       eval e (defargs env xs (map Ref as))))
 
@@ -112,8 +129,8 @@ apply _ argms = error "applying a non-procedure"
 
 elab :: Defn -> Env -> M Env
 
-elab (Val x e) env = 
-  eval e env $> (\ v -> 
+elab (Val x e) env =
+  eval e env $> (\ v ->
     bind v $> (\ a -> result (define env x (Ref a))))
 
 elab (Rec x (Lambda xs e1)) env =
@@ -127,7 +144,7 @@ elab (Rec x _) env =
 
 init_env :: Env
 init_env =
-  make_env [("nil", Const Nil), 
+  make_env [("nil", Const Nil),
     ("true", Const (BoolVal True)), ("false", Const (BoolVal False)),
     pureprim "+" (\ [IntVal a, IntVal b] -> IntVal (a + b)),
     pureprim "-" (\ [IntVal a, IntVal b] -> IntVal (a - b)),
@@ -167,7 +184,7 @@ instance Show Value where
   show (BoolVal b) = if b then "true" else "false"
   show Nil = "[]"
   show (Cons h t) = "[" ++ show h ++ shtail t ++ "]"
-    where 
+    where
       shtail Nil = ""
       shtail (Cons h t) = ", " ++ show h ++ shtail t
       shtail x = " . " ++ show x
@@ -184,11 +201,13 @@ type GloState = (Env, Mem)
 
 obey :: Phrase -> GloState -> (String, GloState)
 obey (Calculate exp) (env, mem) =
-  let (v, mem') = eval exp env mem in
-  (print_value v, (env, mem'))
+  let (v, mem') = eval exp env mem in case v of
+    Just v' -> (print_value v', (env, mem'))
+    Nothing -> ("error: exit outside of loop", (env, mem'))
 obey (Define def) (env, mem) =
   let x = def_lhs def in
-  let (env', mem') = elab def env mem in
-  (print_defn env' x, (env', mem'))
+  let (env', mem') = elab def env mem in case env' of
+    Just env'' -> (print_defn env'' x, (env'', mem'))
+    Nothing    -> ("error: exit outside of loop", (env, mem'))
 
 main = dialog funParser obey (init_env, init_mem)

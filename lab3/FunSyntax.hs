@@ -18,6 +18,8 @@ data Expr =                     -- Expressions $e$
   | Assign Expr Expr            -- \pg $e_1$ := $e_2$
   | Sequence Expr Expr          -- \pg $e_1$; $e_2$
   | While Expr Expr             -- \pg while $e_1$ do $e_2$
+  | Loop Expr
+  | Exit
   deriving Show
 
 data Defn =                     -- Definitions $d$
@@ -47,7 +49,7 @@ pp p 0 _ = showString "..."
 
 pp p d (Let def body) =
   showParen (p < 8)
-    (showString "let " . pp_def d def 
+    (showString "let " . pp_def d def
       . showString " in " . pp 8 (d-1) body)
 
 pp p d (Lambda fps body) =
@@ -61,19 +63,25 @@ pp p d (Sequence e1 e2) =
 
 pp p d (If e1 e2 e3) =
   showParen (p < 7)
-    (showString "if " . pp 7 (d-1) e1 . showString " then " 
+    (showString "if " . pp 7 (d-1) e1 . showString " then "
       . pp 7 (d-1) e2 . showString " else " . pp 7 (d-1) e3)
 
 pp p d (While e1 e2) =
   showParen (p < 7)
-    (showString "while " . pp 7 (d-1) e1 
+    (showString "while " . pp 7 (d-1) e1
       . showString " do " . pp 7 (d-1) e2)
+
+pp p d (Loop e) =
+  showParen (p < 7)
+    (showString "loop " . pp 7 (d-1) e)
+
+pp p d Exit = showString "exit"
 
 pp p d (Assign e1 e2) =
   showParen (p < 4)
     (pp 3 (d-1) e1 . showString " := " . pp 4 (d-1) e2)
 
-pp p d (Apply f aps) = 
+pp p d (Apply f aps) =
   showParen (p < 2)
     (pp 2 d f . showString "(" . pp_list (pp 8 (d-1)) aps . showString ")")
 
