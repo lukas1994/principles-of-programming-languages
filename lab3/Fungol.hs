@@ -10,21 +10,37 @@ import FunParser
 
 infixl 1 $>
 
-type M a = Mem -> (a, Mem)
+type Answer = (String, GloState)
 
-result x mem = (x, mem)
+type Cont a = a -> Mem -> Answer
 
-(xm $> f) mem =
-  let (x, mem') = xm mem in (f $! x) mem'
+type M a = Mem -> Cont () -> Cont a -> Answer
+
+result x mem kx ks = ks x mem
+
+(xm $> f) mem kx ks =
+  xm mem kx (\x mem' -> f x mem' kx ks)
 
 get :: Location -> M Value
-get a mem = (contents mem a, mem)
+get a mem kx ks = ks (contents mem a) mem
 
 put :: Location -> Value -> M ()
-put a v mem = ((), update mem a v)
+put a v mem kx ks = ks () (update mem a v)
 
 new :: M Location
-new mem = let (a, mem') = fresh mem in (a, mem')
+new mem kx ks = let (a, mem') = fresh mem in ks a mem'
+
+exit :: M a
+exit m kx ks = kx () m
+
+orelse :: M a -> M a -> M a
+orelse xm ym m kx ks = xm m (\() m -> ym m kx ks) ks
+
+callxc :: (Cont () -> M a) -> M a
+callxc f mem kx ks = f kx mem kx ks
+
+withxc :: Cont () -> M a -> M a
+withxc kx xm mem kx' ks = xm mem kx ks
 
 bind :: Value -> M Location
 bind v = new $> (\ a -> put a v $> (\ () -> result a))
@@ -33,7 +49,7 @@ bind v = new $> (\ a -> put a v $> (\ () -> result a))
 -- SEMANTIC DOMAINS
 
 data Value =
-    IntVal Integer 
+    IntVal Integer
   | BoolVal Bool
   | Nil | Cons Value Value
 
@@ -50,9 +66,15 @@ type Mem = Memory Value
 
 eval :: Expr -> Env -> M Value
 
+eval Exit env = exit
+
+-- exit terminates statically or textually closest loop
+eval (Loop e) env = u
+  where u = (eval e env $> \_ -> u) `orelse` result Nil
+
 eval (Number n) env = result (IntVal n)
 
-eval (Variable x) env = 
+eval (Variable x) env =
   case find env x of
     Const v -> result v
     Ref a -> get a
@@ -94,17 +116,18 @@ eval (While e1 e2) env = u
 
 eval e env =
   error ("can't evaluate " ++ pretty e)
-	
+
 mapm :: (a -> M b) -> [a] -> M [b]
 mapm f [] = result []
 mapm f (x:xs) =
   f x $> (\y -> mapm f xs $> (\ys -> result (y:ys)))
 
-abstract :: [Ident] -> Expr -> Env -> Def
-abstract xs e env =
-  Proc (\ args -> 
+abstract :: [Ident] -> Expr -> Env -> Cont () -> Def
+abstract xs e env kx =
+  Proc (\ args ->
     mapm bind args $> (\ as ->
-      eval e (defargs env xs (map Ref as))))
+      withxc kx (eval e (defargs env xs (map Ref as))))
+  )
 
 apply :: Def -> [Value] -> M Value
 apply (Proc f) args = f args
@@ -112,12 +135,14 @@ apply _ argms = error "applying a non-procedure"
 
 elab :: Defn -> Env -> M Env
 
-elab (Val x e) env = 
-  eval e env $> (\ v -> 
+elab (Val x e) env =
+  eval e env $> (\ v ->
     bind v $> (\ a -> result (define env x (Ref a))))
 
 elab (Rec x (Lambda xs e1)) env =
-  let env' = define env x (abstract xs e1 env') in result env'
+  callxc (\c ->
+    let env' = define env x (abstract xs e1 env' c) in result env'
+  )
 
 elab (Rec x _) env =
   error "RHS of letrec must be a lambda"
@@ -127,7 +152,7 @@ elab (Rec x _) env =
 
 init_env :: Env
 init_env =
-  make_env [("nil", Const Nil), 
+  make_env [("nil", Const Nil),
     ("true", Const (BoolVal True)), ("false", Const (BoolVal False)),
     pureprim "+" (\ [IntVal a, IntVal b] -> IntVal (a + b)),
     pureprim "-" (\ [IntVal a, IntVal b] -> IntVal (a - b)),
@@ -167,7 +192,7 @@ instance Show Value where
   show (BoolVal b) = if b then "true" else "false"
   show Nil = "[]"
   show (Cons h t) = "[" ++ show h ++ shtail t ++ "]"
-    where 
+    where
       shtail Nil = ""
       shtail (Cons h t) = ", " ++ show h ++ shtail t
       shtail x = " . " ++ show x
@@ -184,11 +209,13 @@ type GloState = (Env, Mem)
 
 obey :: Phrase -> GloState -> (String, GloState)
 obey (Calculate exp) (env, mem) =
-  let (v, mem') = eval exp env mem in
-  (print_value v, (env, mem'))
+  eval exp env mem
+    (\ () mem' -> ("***exit in main program***", (env, mem')))
+    (\ v mem' -> (print_value v, (env, mem')))
 obey (Define def) (env, mem) =
   let x = def_lhs def in
-  let (env', mem') = elab def env mem in
-  (print_defn env' x, (env', mem'))
+  elab def env mem
+    (\ () mem' -> ("***exit in definition***", (env, mem')))
+    (\ env' mem' -> (print_defn env' x, (env', mem')))
 
 main = dialog funParser obey (init_env, init_mem)

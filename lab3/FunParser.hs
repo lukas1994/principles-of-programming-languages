@@ -6,43 +6,45 @@ import Data.Char
 
 -- Lexer
 
-data Token = 
+data Token =
     IDENT IdKind Ident | NUMBER Integer | STRING String
   | LPAR | RPAR | COMMA | EQUAL | ASSIGN | SEMI | SSEMI | MINUS
   | IF | THEN | ELSE | LET | REC | VAL | LAMBDA | IN | WHILE | DO
-  | BADTOK Char
+  | BADTOK Char | LOOP | EXIT
   deriving Eq
 
-data IdKind = 
-  ID | MONOP | CONSOP | MULOP | ADDOP | RELOP 
+data IdKind =
+  ID | MONOP | CONSOP | MULOP | ADDOP | RELOP
   deriving (Eq, Show)
 
 instance Show Token where
-  show t = 
-    case t of 
-      IDENT k x -> show x; NUMBER n -> show n; 
+  show t =
+    case t of
+      IDENT k x -> show x; NUMBER n -> show n;
       STRING s -> "\"" ++ s ++ "\""
       LPAR -> "("; RPAR -> ")"; COMMA -> ","; MINUS -> "-"
       EQUAL -> "="; SEMI -> ";"; SSEMI -> ";;"; ASSIGN -> ":="
       IF -> "if"; THEN -> "then"; ELSE -> "else"; LET -> "let"
       REC -> "rec"; VAL -> "val"; LAMBDA -> "lambda"; IN -> "in"
       WHILE -> "while"; DO -> "do"
-      BADTOK c -> [c]
+      BADTOK c -> [c];
+      LOOP -> "loop"; EXIT -> "exit"
 
-kwlookup = 
+kwlookup =
   make_kwlookup (IDENT ID)
     [("if", IF), ("then", THEN), ("else", ELSE), ("let", LET), ("in", IN),
-      ("rec", REC), ("val", VAL), ("lambda", LAMBDA), ("while", WHILE), 
+      ("rec", REC), ("val", VAL), ("lambda", LAMBDA), ("while", WHILE),
       ("do", DO),
-      ("div", IDENT MULOP "div"), 
-      ("mod", IDENT MULOP "mod")]
+      ("div", IDENT MULOP "div"),
+      ("mod", IDENT MULOP "mod"),
+      ("loop", LOOP), ("exit", EXIT)]
 
 lexer =
-  do 
+  do
     c <- nextch
     case c of
       _ | isAlpha c ->
-        do 
+        do
           s <- star (\ c -> isAlphaNum c || c == '_')
           return (kwlookup (c:s))
       _ | isDigit c ->
@@ -66,12 +68,12 @@ lexer =
       ';' -> switch [(';', return SSEMI)] (return SEMI)
       ':' -> switch [('=', return ASSIGN)] (return (IDENT CONSOP ":"))
       ' ' -> lexer
-      '\t' -> lexer 
+      '\t' -> lexer
       '\n' -> do incln; lexer
       _ -> return (BADTOK c)
-              
+
 scanComment =
-  do 
+  do
     c <- nextch
     case c of
       '\n' -> incln
@@ -84,37 +86,38 @@ p_phrase =
   do e <- p_expr; eat SSEMI; return (Calculate e)
   <+> do d <- p_def; eat SSEMI; return (Define d)
 
-p_def = 
+p_def =
   do eat VAL; (x, e) <- p_eqn; return (Val x e)
   <+> do eat REC; (x, e) <- p_eqn; return (Rec x e)
 
 p_eqn =
   do x <- p_name; eat EQUAL; e <- p_expr; return (x, e)
-  <+> do x <- p_name; xs <- p_formals; 
+  <+> do x <- p_name; xs <- p_formals;
 		eat EQUAL; e <- p_expr; return (x, Lambda xs e)
 
-p_formals = 
+p_formals =
   do eat LPAR; xs <- p_list0 p_name COMMA; eat RPAR; return xs
 
-p_expr = 
+p_expr =
   do eat LET; d <- p_def; eat IN; e1 <- p_expr; return (Let d e1)
-  <+> do eat LAMBDA; xs <- p_formals; 
+  <+> do eat LAMBDA; xs <- p_formals;
 		e1 <- p_expr; return (Lambda xs e1)
   <+> p_sequence
 
 p_sequence =
   do es <- p_list p_cond SEMI; return (foldr1 Sequence es)
 
-p_cond = 
+p_cond =
   do eat IF; e1 <- p_cond; eat THEN; e2 <- p_cond;
                 eat ELSE; e3 <- p_cond; return (If e1 e2 e3)
-  <+> do eat WHILE; e1 <- p_cond; eat DO; 
+  <+> do eat WHILE; e1 <- p_cond; eat DO;
 		e2 <- p_cond; return (While e1 e2)
+  <+> do eat LOOP; e <- p_cond; return (Loop e)
   <+> p_term6
 
 p_term6 =
   do es <- p_list p_term5 ASSIGN; return (foldr1 Assign es)
-p_term5 = p_opchainl p_relop p_term4 
+p_term5 = p_opchainl p_relop p_term4
 p_term4 = p_opchainl p_addop p_term3
 p_term3 = p_opchainl p_mulop p_term2
 p_term2 = p_opchainr (p_ident CONSOP) p_term1
@@ -124,7 +127,7 @@ p_addop = p_ident ADDOP <+> (do eat MINUS; return "-")
 p_mulop = p_ident MULOP
 
 p_opchainl :: Parser t Ident -> Parser t Expr -> Parser t Expr
-p_opchainl p_op p_rand = 
+p_opchainl p_op p_rand =
   do e0 <- p_rand; p_tail e0
   where
     p_tail e1 =
@@ -136,7 +139,7 @@ p_opchainr p_op p_rand =
   do e1 <- p_rand; p_tail e1
   where
     p_tail e1 =
-      do w <- p_op; e2 <- p_opchainr p_op p_rand; 
+      do w <- p_op; e2 <- p_opchainr p_op p_rand;
       				return (Apply (Variable w) [e1, e2])
       <+> return e1
 
@@ -160,6 +163,7 @@ p_primary =
   do n <- p_number; return (Number n)
   <+> do x <- p_name; return (Variable x)
   <+> do eat LPAR; e <- p_expr; eat RPAR; return e
+  <+> do eat EXIT; return Exit
 
 p_number =
   do t <- scan; case t of NUMBER n -> return n; _ -> p_fail

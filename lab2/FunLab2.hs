@@ -32,18 +32,16 @@ put a v mem = ((), update mem a v)
 
 -- SEMANTIC DOMAINS
 
-data Thunk = Thunk Expr Env
-
 data Value =
     IntVal Integer
   | BoolVal Bool
   | Addr Location
   | Nil | Cons Value Value
-  | Function ([Thunk] -> M Value)
+  | Function ([M Value] -> M Value)
 
 data Def =
     Const Value
-  | Param Thunk
+  | Param (M Value)
 
 type Env = Environment Def
 
@@ -57,10 +55,10 @@ eval (Number n) env = result (IntVal n)
 eval (Variable x) env =
   case find env x of
     Const v -> result v
-    Param (Thunk e env) -> eval e env
+    Param vm -> vm
 eval (Apply f es) env =
   eval f env $> (\fv ->
-    apply fv (map (\e -> Thunk e env) es))
+    apply fv (map (\e -> eval e env) es))
 eval (If e1 e2 e3) env =
   eval e1 env $> (\b ->
     case b of
@@ -92,7 +90,7 @@ abstract :: [Ident] -> Expr -> Env -> Value
 abstract xs e env =
   Function (\args -> eval e (defargs env xs (map Param args)))
 
-apply :: Value -> [Thunk] -> M Value
+apply :: Value -> [M Value] -> M Value
 apply (Function f) args = f args
 apply _ args = error "applying a non-function"
 
@@ -140,9 +138,9 @@ init_env =
     -- primitive x f = (x, Const (Function (primwrap x f)))
     primitive x f = (x, Const (Function (\args -> values args $> \l -> f l)))
     pureprim x f = primitive x (result . f)
-    values :: [Thunk] -> M [Value]
+    values :: [M a] -> M [a]
     values [] = result []
-    values ((Thunk e env):xs) = eval e env $> (\v -> values xs $> (\vs -> result (v:vs)))
+    values (x:xs) = x $> (\v -> values xs $> (\vs -> result (v:vs)))
 
 -- AUXILIARY FUNCTIONS ON VALUES
 
